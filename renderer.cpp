@@ -143,34 +143,62 @@ void Renderer::render(const Triangle &t)
             {
                 depthBuffer.setElem(x, y, P.z);
                 vec2 tex_coord = {0, 0};
+                vec3 world_pos = {0, 0, 0};
                 vec3 normal_interpolated = {0, 0, 0};
                 float intensity = 0.0f;
                 for (int i = 0; i < 3; i++)
                 {
+                    world_pos = world_pos + t.vertices[i]->pos * bcs[i];
                     tex_coord = tex_coord + t.vertices[i]->tex_coord * bcs[i];
                     normal_interpolated = normal_interpolated + t.vertices[i]->norm * bcs[i];
                     // intensity = intensity + t.vertices[i]->intensity * bcs[i];
                 }
 
                 // 必须要对normal进行插值，不然扰动就是基于面的，会出现棱角分明，而不是基于fragment的normal进行的扰动
-                mat3 TBN = {{t.TBN[0],
-                             t.TBN[1],
+                // mat3 TBN = {{t.TBN[0],
+                //              t.TBN[1],
+                //              normal_interpolated.normalized()}};
+
+                // 另一种方法：将u，v视作x，y，z的函数，T就是u变化最快的方向，B就是v变化最快的方向
+                // 每个fragment处的TB都是不同的，因为每个fragment处UV变化最快的方向也不同
+                // n与TB正交是切线空间的内在要求，而不是与三角形facet有关，也就是说每个fragment都会形成一个TBN frame
+                // 消除了上一种方法带来的三角形棱角
+                mat3 A = {{t.vertices[1]->pos - t.vertices[0]->pos,
+                           t.vertices[2]->pos - t.vertices[0]->pos,
+                           normal_interpolated}};
+                mat A_inv = A.invert();
+                vec3 T = A_inv * vec3(t.vertices[1]->tex_coord.x - t.vertices[0]->tex_coord.x, t.vertices[2]->tex_coord.x - t.vertices[0]->tex_coord.x, 0);
+                vec3 B = A_inv * vec3(t.vertices[1]->tex_coord.y - t.vertices[0]->tex_coord.y, t.vertices[2]->tex_coord.y - t.vertices[0]->tex_coord.y, 0);
+                mat3 TBN = {{T.normalized(),
+                             B.normalized(),
                              normal_interpolated.normalized()}};
+
                 vec3 normal_gt = cur_mesh->normal(tex_coord);
-                // std::cout << "normal_gt: " << normal_gt << std::endl;
                 vec3 normal_world = TBN.transpose() * normal_gt;
-                // std::cout << "world_norm: " << normal_world << std::endl;
-                for (auto light : cur_scene->lights)
-                {
-                    intensity += std::max(0.0, normal_world * light);
-                }
 
                 // 不应该是对顶点颜色进行插值，而是应该对坐标进行插值，否则会严重降低纹理精度
-                TGAColor color = cur_mesh->texture.sample2D(tex_coord.x, tex_coord.y) * intensity;
+                TGAColor color = cur_mesh->texture.sample2D(tex_coord.x, tex_coord.y);
+                color = phongShader(world_pos, tex_coord, normal_world, color);
                 colorBuffer.set({P.x, P.y}, color);
             }
         }
     }
+}
+
+TGAColor Renderer::phongShader(const vec3 &fragPos, const vec2 &uv, const vec3 &normal, const TGAColor &color)
+{
+    float ka = 0.05, kd = 0.6, ks = 0.35;
+
+    float intensity = 0.0f;
+
+    for (auto light : cur_scene->lights)
+    {
+        vec3 h = ((camera.eye - fragPos).normalized() + light).normalized();
+        auto spec_coef = cur_mesh->specular(uv);
+        intensity += ambient_intensity * ka + kd * std::max(0.0, normal * light) + ks * std::pow(std::max(0.0, h * normal), spec_coef);
+    }
+
+    return color * intensity;
 }
 
 vec4 Renderer::sample2D(const TGAImage &texture, const float &u, const float &v)

@@ -39,13 +39,14 @@ struct TGAColor
         return ret;
     }
 
-    TGAColor &operator*(const double &x)
+    TGAColor operator*(const double &x) const
     {
+        TGAColor ret;
         for (int i = 0; i < 4; i++)
         {
-            bgra[i] = std::max(0.0, std::min(255.0, bgra[i] * x));
+            ret[i] = std::max(0.0, std::min(255.0, bgra[i] * x));
         }
-        return *this;
+        return ret;
     }
 };
 

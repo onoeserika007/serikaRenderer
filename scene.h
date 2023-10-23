@@ -27,6 +27,7 @@ public:
     std::vector<Triangle> triangles;
     TGAImage texture;
     TGAImage normalMap;
+    TGAImage specularMap;
 
     Mesh(std::shared_ptr<Model> model)
     {
@@ -59,12 +60,19 @@ public:
         }
         texture = model->diffuse();
         normalMap = model->normalmap;
+        specularMap = model->specularmap;
     }
 
     vec3 normal(const vec2 &uvf) const
     {
         TGAColor c = normalMap.sample2D(uvf[0], uvf[1]);
         return vec3{(double)c[2], (double)c[1], (double)c[0]} * 2. / 255. - vec3{1, 1, 1};
+    }
+
+    float specular(const vec2 &uv) const
+    {
+        TGAColor c = specularMap.sample2D(uv.x, uv.y);
+        return c[0];
     }
 };
 

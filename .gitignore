@@ -1,5 +1,6 @@
 # dir
 /build
+/.vscode
 
 # file
 *.o

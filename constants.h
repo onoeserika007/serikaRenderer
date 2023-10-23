@@ -9,6 +9,6 @@ const TGAColor green = {0, 255, 0, 255};
 const int width = 800;
 const int height = 800;
 
-const vec3 eye = {1.5, 2, 2};
+const vec3 eye = {1, 1, 2};
 const vec3 center = {0, 0, 0};
 const vec3 up = {0, 1, 0};

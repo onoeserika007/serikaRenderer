@@ -18,6 +18,8 @@ class Renderer
     int width;
     int height;
 
+    float ambient_intensity = 10;
+
 public:
     mat4 toScreen;
     mat4 MVP;
@@ -49,6 +51,8 @@ public:
     void render(Model *model, const Scene &scene);
     void render(std::shared_ptr<Mesh> mesh, const Scene &scene);
     void render(const Triangle &t);
+
+    TGAColor phongShader(const vec3 &fragPos, const vec2 &uv, const vec3 &normal, const TGAColor &color);
 
     void drawAxis();
 
