@@ -9,7 +9,6 @@ struct Vertex
     vec3 pos;
     vec3 norm;
     vec2 tex_coord;
-    float intensity;
     vec3 screen_coord;
 };
 
@@ -83,12 +82,41 @@ struct Camera
     vec3 up;
 };
 
+struct Light
+{
+    enum class Type
+    {
+        DirectionalLight,
+        PointLight
+    };
+    Type type;
+    std::shared_ptr<TGAImage> shadowmap;
+    mat4 MVP_viewport;
+    vec3 intensity;
+    Light() = default;
+    Light(const vec3 _intensity, std::shared_ptr<TGAImage> _shadowmap, Type _type) : intensity(_intensity), shadowmap(_shadowmap), type(_type) {}
+
+    virtual void dummyFunc() {}
+};
+
+struct DirectionalLight : public Light
+{
+    vec3 lightDir;
+    DirectionalLight() = default;
+    DirectionalLight(const vec3 &_lightDir, const vec3 _intensity = {1, 1, 1}, std::shared_ptr<TGAImage> _shadowmap = nullptr)
+        : lightDir(_lightDir), Light(_intensity, _shadowmap, Type::DirectionalLight) {}
+};
+
+struct PointLight : public Light
+{
+};
+
 class Scene
 {
 public:
     std::vector<std::shared_ptr<Model>> models;
     std::vector<std::shared_ptr<Mesh>> meshes;
-    std::vector<vec3> lights;
+    std::vector<std::shared_ptr<DirectionalLight>> dirlights;
 
     void addModel(std::shared_ptr<Model> model)
     {
@@ -105,8 +133,11 @@ public:
         meshes.push_back(std::move(mesh));
     }
 
-    void addLight(const vec3 &light)
+    void addLight(std::shared_ptr<Light> light)
     {
-        lights.push_back(light.normalized());
+        if (light->type == Light::Type::DirectionalLight)
+        {
+            dirlights.push_back(std::dynamic_pointer_cast<DirectionalLight>(light));
+        }
     }
 };

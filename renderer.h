@@ -7,6 +7,12 @@
 // #include "transforms.hpp"
 #include <string>
 
+enum class AttachmentType
+{
+    COLOR,
+    SHADOWMAP
+};
+
 class Renderer
 {
     Buffer<float> depthBuffer;
@@ -18,7 +24,10 @@ class Renderer
     int width;
     int height;
 
+    int shadowmap_resolution = 1024;
+
     float ambient_intensity = 10;
+    float zDepth;
 
 public:
     mat4 toScreen;
@@ -28,12 +37,13 @@ public:
     mat4 project;
     mat4 viewport;
 
-    Renderer(int _width, int _height, int _sample_rate = 1)
+    Renderer(int _width, int _height, int _sample_rate = 1, float _zDepth = 1.0)
         : width(_width),
           height(_height),
           sample_rate(_sample_rate),
           depthBuffer(_width * _sample_rate, _height * _sample_rate, 1.0),
-          colorBuffer(_width, _height, TGAImage::RGB) {}
+          colorBuffer(_width, _height, TGAImage::RGB),
+          zDepth(_zDepth) {}
     vec3 getBarycentric(vec2 p0, vec2 p1, vec2 p2, const vec2 &P);
     vec3 getBarycentric(vec3 *pts, const vec3 &P);
     vec3 getBarycentric(vec2 *pts, const vec2 &P);
@@ -48,11 +58,13 @@ public:
     void setCamera(const Camera _camera) { camera = _camera; }
     vec4 sample2D(const TGAImage &texture, const float &u, const float &v);
     void render(const Scene &scene);
-    void render(Model *model, const Scene &scene);
     void render(std::shared_ptr<Mesh> mesh, const Scene &scene);
-    void render(const Triangle &t);
 
+    void render(const Triangle &t, AttachmentType type, TGAImage &renderTarget);
     TGAColor phongShader(const vec3 &fragPos, const vec2 &uv, const vec3 &normal, const TGAColor &color);
+    void fragment_shader_color(const vec3 &P, const Triangle &t, const vec3 &bcs, TGAImage &renderTarget);
+    void fragment_shader_shadowmap(const vec3 &P, const Triangle &t, const vec3 &bcs, TGAImage &renderTarget);
+    void generateShadowMap(const Scene &scene);
 
     void drawAxis();
 

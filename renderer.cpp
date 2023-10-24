@@ -1,4 +1,28 @@
 #include "renderer.h"
+#include "transforms.h"
+
+TGAColor pack(float src)
+{
+    TGAColor dst;
+    auto p = reinterpret_cast<std::uint8_t *>(&src);
+    for (int i = 0; i < 4; i++)
+    {
+        dst[i] = *(p + i);
+    }
+    return dst;
+}
+
+float unpack(TGAColor &src)
+{
+    auto fp = reinterpret_cast<float *>(src.bgra);
+    return *fp;
+}
+
+float unpack(TGAColor &&src)
+{
+    auto fp = reinterpret_cast<float *>(src.bgra);
+    return *fp;
+}
 
 void Renderer::updateMVP()
 {
@@ -6,13 +30,37 @@ void Renderer::updateMVP()
     toScreen = viewport * MVP;
 }
 
+void Renderer::generateShadowMap(const Scene &scene)
+{
+    for (auto light : scene.dirlights)
+    {
+        light->shadowmap = std::make_shared<TGAImage>(shadowmap_resolution, shadowmap_resolution, 4);
+        light->shadowmap->clear(pack(zDepth));
+        auto view = get_lookAt(light->lightDir * (camera.eye - camera.focus).norm(), camera.focus, camera.up);
+        auto project = get_ortho_projection(5, 5, 5, 5, 0.2, 80);
+        auto viewport = get_viewport(shadowmap_resolution, shadowmap_resolution, zDepth);
+        light->MVP_viewport = viewport * project * view;
+        for (auto mesh : scene.meshes)
+        {
+            cur_mesh = mesh.get();
+            for (auto &v : mesh->vertices)
+            {
+                auto scpos = light->MVP_viewport * embed<4>(v.pos, 1.0);
+                v.screen_coord = proj<3>(scpos / scpos[3]);
+            }
+
+            for (auto t : mesh->triangles)
+            {
+                render(t, AttachmentType::SHADOWMAP, *light->shadowmap);
+            }
+        }
+    }
+}
+
 void Renderer::render(const Scene &scene)
 {
-    // for (auto model : scene.models)
-    // {
-    //     render(model.get(), scene);
-    // }
     cur_scene = &scene;
+    generateShadowMap(scene);
     for (auto mesh : scene.meshes)
     {
         cur_mesh = mesh.get();
@@ -23,65 +71,14 @@ void Renderer::render(const Scene &scene)
     drawAxis();
 }
 
-void Renderer::render(Model *model, const Scene &scene)
-{
-    for (int i = 0; i < model->nfaces(); i++)
-    {
-        vec3 world_coords[3];
-        vec3 screen_coords[3];
-        vec2 tex_coords[3];
-        vec4 colors[3];
-        auto texture = model->diffuse();
-        for (int j = 0; j < 3; j++)
-        {
-            auto v = world_coords[j] = model->vert(i, j);
-            auto uv = tex_coords[j] = model->uv(i, j);
-            auto n = model->normal(i, j).normalized();
-            float intensity = 0.0f;
-            for (auto light : scene.lights)
-            {
-                intensity += std::max(0.0, n * light);
-            }
-            auto tmp = viewport * MVP * embed<4, 3>(world_coords[j], 1.0);
-            tmp = tmp / tmp[3];
-            screen_coords[j] = proj<3, 4>(tmp);
-            colors[j] = sample2D(texture, uv.x, uv.y) * intensity;
-        }
-        vec3 n = (world_coords[1] - world_coords[0]) ^ (world_coords[2] - world_coords[0]);
-        n = n.normalized();
-
-        bool flag = false;
-        for (auto light : scene.lights)
-        {
-            if (n * light > 0)
-            {
-                flag = true;
-                break;
-            }
-        }
-        if (flag)
-        {
-            triangle(screen_coords, colorBuffer, colors);
-        }
-    }
-}
-
 void Renderer::render(std::shared_ptr<Mesh> mesh, const Scene &scene)
 {
     // vertex shader
     for (auto &v : mesh->vertices)
     {
-        // std::cout << "vertex shading:" << std::endl;
         auto scpos = toScreen * embed<4, 3>(v.pos, 1.0);
         scpos = scpos / scpos[3];
         v.screen_coord = proj<3, 4>(scpos);
-        // std::cout << scpos << std::endl;
-        float intensity = 0.0f;
-        for (auto light : scene.lights)
-        {
-            intensity += std::max(0.0, light * v.norm);
-        }
-        v.intensity = intensity;
     }
 
     for (auto t : mesh->triangles)
@@ -96,11 +93,94 @@ void Renderer::render(std::shared_ptr<Mesh> mesh, const Scene &scene)
         // 用视线去cull仍然会有黑线问题
 
         // rasterization
-        render(t);
+        render(t, AttachmentType::COLOR, colorBuffer);
     }
 }
 
-void Renderer::render(const Triangle &t)
+void Renderer::fragment_shader_color(const vec3 &P, const Triangle &t, const vec3 &bcs, TGAImage &renderTarget)
+{
+    if (P.z < depthBuffer.getElem(P.x, P.y))
+    {
+        depthBuffer.setElem(P.x, P.y, P.z);
+        vec2 tex_coord = {0, 0};
+        vec3 world_pos = {0, 0, 0};
+        vec3 normal_interpolated = {0, 0, 0};
+        float intensity = 0.0f;
+        for (int i = 0; i < 3; i++)
+        {
+            world_pos = world_pos + t.vertices[i]->pos * bcs[i];
+            tex_coord = tex_coord + t.vertices[i]->tex_coord * bcs[i];
+            normal_interpolated = normal_interpolated + t.vertices[i]->norm * bcs[i];
+            // intensity = intensity + t.vertices[i]->intensity * bcs[i];
+        }
+
+        // 必须要对normal进行插值，不然扰动就是基于面的，会出现棱角分明，而不是基于fragment的normal进行的扰动
+        // mat3 TBN = {{t.TBN[0],
+        //              t.TBN[1],
+        //              normal_interpolated.normalized()}};
+
+        // 另一种方法：将u，v视作x，y，z的函数，T就是u变化最快的方向，B就是v变化最快的方向
+        // 每个fragment处的TB都是不同的，因为每个fragment处UV变化最快的方向也不同
+        // n与TB正交是切线空间的内在要求，而不是与三角形facet有关，也就是说每个fragment都会形成一个TBN frame
+        // 消除了上一种方法带来的三角形棱角
+        mat3 A = {{t.vertices[1]->pos - t.vertices[0]->pos,
+                   t.vertices[2]->pos - t.vertices[0]->pos,
+                   normal_interpolated}};
+        mat A_inv = A.invert();
+        vec3 T = A_inv * vec3(t.vertices[1]->tex_coord.x - t.vertices[0]->tex_coord.x, t.vertices[2]->tex_coord.x - t.vertices[0]->tex_coord.x, 0);
+        vec3 B = A_inv * vec3(t.vertices[1]->tex_coord.y - t.vertices[0]->tex_coord.y, t.vertices[2]->tex_coord.y - t.vertices[0]->tex_coord.y, 0);
+        mat3 TBN = {{T.normalized(),
+                     B.normalized(),
+                     normal_interpolated.normalized()}};
+
+        vec3 normal_gt = cur_mesh->normal(tex_coord);
+        vec3 normal_world = TBN.transpose() * normal_gt;
+
+        // 不应该是对顶点颜色进行插值，而是应该对坐标进行插值，否则会严重降低纹理精度
+        TGAColor color = cur_mesh->texture.sample2D(tex_coord.x, tex_coord.y);
+        color = phongShader(world_pos, tex_coord, normal_world, color);
+        renderTarget.set({P.x, P.y}, color);
+    }
+}
+
+void Renderer::fragment_shader_shadowmap(const vec3 &P, const Triangle &t, const vec3 &bcs, TGAImage &renderTarget)
+{
+    float cur_depth = unpack(renderTarget.get(P.x, P.y));
+    if (P.z < cur_depth)
+    {
+        renderTarget.set(P.x, P.y, pack(P.z));
+    }
+}
+
+TGAColor Renderer::phongShader(const vec3 &fragPos, const vec2 &uv, const vec3 &normal, const TGAColor &color)
+{
+    float ka = 0.05, kd = 0.6, ks = 0.35;
+
+    float intensity = 0.0f;
+    const float epsilon = 0.5;
+
+    for (auto light : cur_scene->dirlights)
+    {
+        // shadow mapping
+        float shadow_factor = 1.0f;
+        // vec3 frag_light_coord = proj<3>(light->MVP_viewport * embed<4>(fragPos, 1.0));
+        // float light_depth = unpack(light->shadowmap->get(frag_light_coord.x, frag_light_coord.y));
+        // if (light_depth + epsilon < frag_light_coord.z)
+        // {
+        //     shadow_factor = 0.0f;
+        // }
+
+        vec3 h = ((camera.eye - fragPos).normalized() + light->lightDir).normalized();
+        auto spec_coef = cur_mesh->specular(uv);
+        intensity += (ambient_intensity * ka + kd * std::max(0.0, normal * light->lightDir) + ks * std::pow(std::max(0.0, h * normal), spec_coef)) * shadow_factor;
+    }
+
+    // intensity += ambient_intensity * ka;
+
+    return color * intensity;
+}
+
+void Renderer::render(const Triangle &t, AttachmentType type, TGAImage &renderTarget)
 {
     vec2 bbox_min = {width - 1, height - 1};
     vec2 bbox_max = {0, 0};
@@ -138,67 +218,16 @@ void Renderer::render(const Triangle &t)
 
             // 对于三个坐标的点都成立的重心坐标，对于它的三个维度中的两个维度肯定是成立的
             // 对于一点P的重心坐标又是唯一的，那么在投影平面内计算出来的重心坐标就是在空间中的重心坐标
-
-            if (P.z < depthBuffer.getElem(x, y))
+            if (type == AttachmentType::COLOR)
             {
-                depthBuffer.setElem(x, y, P.z);
-                vec2 tex_coord = {0, 0};
-                vec3 world_pos = {0, 0, 0};
-                vec3 normal_interpolated = {0, 0, 0};
-                float intensity = 0.0f;
-                for (int i = 0; i < 3; i++)
-                {
-                    world_pos = world_pos + t.vertices[i]->pos * bcs[i];
-                    tex_coord = tex_coord + t.vertices[i]->tex_coord * bcs[i];
-                    normal_interpolated = normal_interpolated + t.vertices[i]->norm * bcs[i];
-                    // intensity = intensity + t.vertices[i]->intensity * bcs[i];
-                }
-
-                // 必须要对normal进行插值，不然扰动就是基于面的，会出现棱角分明，而不是基于fragment的normal进行的扰动
-                // mat3 TBN = {{t.TBN[0],
-                //              t.TBN[1],
-                //              normal_interpolated.normalized()}};
-
-                // 另一种方法：将u，v视作x，y，z的函数，T就是u变化最快的方向，B就是v变化最快的方向
-                // 每个fragment处的TB都是不同的，因为每个fragment处UV变化最快的方向也不同
-                // n与TB正交是切线空间的内在要求，而不是与三角形facet有关，也就是说每个fragment都会形成一个TBN frame
-                // 消除了上一种方法带来的三角形棱角
-                mat3 A = {{t.vertices[1]->pos - t.vertices[0]->pos,
-                           t.vertices[2]->pos - t.vertices[0]->pos,
-                           normal_interpolated}};
-                mat A_inv = A.invert();
-                vec3 T = A_inv * vec3(t.vertices[1]->tex_coord.x - t.vertices[0]->tex_coord.x, t.vertices[2]->tex_coord.x - t.vertices[0]->tex_coord.x, 0);
-                vec3 B = A_inv * vec3(t.vertices[1]->tex_coord.y - t.vertices[0]->tex_coord.y, t.vertices[2]->tex_coord.y - t.vertices[0]->tex_coord.y, 0);
-                mat3 TBN = {{T.normalized(),
-                             B.normalized(),
-                             normal_interpolated.normalized()}};
-
-                vec3 normal_gt = cur_mesh->normal(tex_coord);
-                vec3 normal_world = TBN.transpose() * normal_gt;
-
-                // 不应该是对顶点颜色进行插值，而是应该对坐标进行插值，否则会严重降低纹理精度
-                TGAColor color = cur_mesh->texture.sample2D(tex_coord.x, tex_coord.y);
-                color = phongShader(world_pos, tex_coord, normal_world, color);
-                colorBuffer.set({P.x, P.y}, color);
+                fragment_shader_color(P, t, bcs, renderTarget);
+            }
+            else if (type == AttachmentType::SHADOWMAP)
+            {
+                fragment_shader_shadowmap(P, t, bcs, renderTarget);
             }
         }
     }
-}
-
-TGAColor Renderer::phongShader(const vec3 &fragPos, const vec2 &uv, const vec3 &normal, const TGAColor &color)
-{
-    float ka = 0.05, kd = 0.6, ks = 0.35;
-
-    float intensity = 0.0f;
-
-    for (auto light : cur_scene->lights)
-    {
-        vec3 h = ((camera.eye - fragPos).normalized() + light).normalized();
-        auto spec_coef = cur_mesh->specular(uv);
-        intensity += ambient_intensity * ka + kd * std::max(0.0, normal * light) + ks * std::pow(std::max(0.0, h * normal), spec_coef);
-    }
-
-    return color * intensity;
 }
 
 vec4 Renderer::sample2D(const TGAImage &texture, const float &u, const float &v)
