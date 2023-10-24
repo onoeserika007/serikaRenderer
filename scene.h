@@ -104,7 +104,7 @@ struct DirectionalLight : public Light
     vec3 lightDir;
     DirectionalLight() = default;
     DirectionalLight(const vec3 &_lightDir, const vec3 _intensity = {1, 1, 1}, std::shared_ptr<TGAImage> _shadowmap = nullptr)
-        : lightDir(_lightDir), Light(_intensity, _shadowmap, Type::DirectionalLight) {}
+        : lightDir(_lightDir.normalized()), Light(_intensity, _shadowmap, Type::DirectionalLight) {}
 };
 
 struct PointLight : public Light

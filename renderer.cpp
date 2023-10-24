@@ -157,25 +157,25 @@ TGAColor Renderer::phongShader(const vec3 &fragPos, const vec2 &uv, const vec3 &
     float ka = 0.05, kd = 0.6, ks = 0.35;
 
     float intensity = 0.0f;
-    const float epsilon = 0.5;
+    const float epsilon = 3e-3;
 
     for (auto light : cur_scene->dirlights)
     {
         // shadow mapping
         float shadow_factor = 1.0f;
-        // vec3 frag_light_coord = proj<3>(light->MVP_viewport * embed<4>(fragPos, 1.0));
-        // float light_depth = unpack(light->shadowmap->get(frag_light_coord.x, frag_light_coord.y));
-        // if (light_depth + epsilon < frag_light_coord.z)
-        // {
-        //     shadow_factor = 0.0f;
-        // }
+        vec3 frag_light_coord = proj<3>(light->MVP_viewport * embed<4>(fragPos, 1.0));
+        float light_depth = unpack(light->shadowmap->get(frag_light_coord.x, frag_light_coord.y));
+        if (light_depth + epsilon < frag_light_coord.z)
+        {
+            shadow_factor = 0.0f;
+        }
 
         vec3 h = ((camera.eye - fragPos).normalized() + light->lightDir).normalized();
         auto spec_coef = cur_mesh->specular(uv);
-        intensity += (ambient_intensity * ka + kd * std::max(0.0, normal * light->lightDir) + ks * std::pow(std::max(0.0, h * normal), spec_coef)) * shadow_factor;
+        intensity += (kd * std::max(0.0, normal * light->lightDir) + ks * std::pow(std::max(0.0, h * normal), spec_coef)) * shadow_factor;
     }
 
-    // intensity += ambient_intensity * ka;
+    intensity += ambient_intensity * ka;
 
     return color * intensity;
 }

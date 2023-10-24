@@ -11,7 +11,7 @@ int main(int argc, char **argv)
 
     auto afk_face = std::make_shared<Model>("./obj/african_head/african_head.obj");
 
-    auto dirLight = std::make_shared<DirectionalLight>(vec3(0, 0, 1));
+    auto dirLight = std::make_shared<DirectionalLight>(vec3(0, 1, 1));
     Camera camera = {eye, center, up};
     renderer.setCamera(camera);
     // renderer.model = get_rotation({0, 1, 0}, 180.0);
